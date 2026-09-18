@@ -12,6 +12,13 @@ gated behind a validation step and (by default) manual confirmation before anyth
 money. There is no README — this file plus the module docstrings (unusually thorough in this
 repo; read them before assuming behavior) are the documentation.
 
+Pushed to a private GitHub repo (`sam-d4/trading-bot`, remote `origin`/`main`). The user has
+asked that this repo stay updated as work progresses — commit and push meaningful chunks of
+completed work (a feature, a fix, a finished phase) without needing to ask each time, rather
+than batching everything into rare, large commits or leaving work uncommitted between sessions.
+Still exercise normal judgment on commit granularity and message quality; this authorizes the
+routine of committing/pushing itself, not skipping review of what's being staged.
+
 ## Commands
 
 Python env uses `uv` (not plain pip) and a local `.venv`:
