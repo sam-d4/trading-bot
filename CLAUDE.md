@@ -19,6 +19,12 @@ than batching everything into rare, large commits or leaving work uncommitted be
 Still exercise normal judgment on commit granularity and message quality; this authorizes the
 routine of committing/pushing itself, not skipping review of what's being staged.
 
+**Keep this file itself current, too.** When a change adds/removes a command, alters the
+architecture described below, introduces a new gotcha, or makes something here stale or wrong,
+update this file in the same piece of work rather than leaving it to drift — don't wait for a
+dedicated "update the docs" pass. Prefer editing the relevant section over appending a changelog
+entry; this file should always describe the repo as it currently is.
+
 ## Commands
 
 Python env uses `uv` (not plain pip) and a local `.venv`:
