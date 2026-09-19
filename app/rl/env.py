@@ -41,15 +41,18 @@ from app.strategy.base import Signal
 
 ACTION_TO_POSITION = {0: 0, 1: 1, 2: -1}  # matches Signal.FLAT/LONG/SHORT ordering
 TRANSACTION_COST_BPS = 1.0
-# A tiny per-step cost for sitting flat - deliberately much smaller than TRANSACTION_COST_BPS
-# (1.0) or a typical hourly log-return, so it never makes a bad trade look good. Its only job is
-# to break "always flat" as a stable zero-reward equilibrium: with pure P&L reward, once PPO
-# discovers most trades lose to costs, staying flat forever scores exactly 0 and nothing in the
-# reward signal ever pushes it to reconsider (observed repeatedly in practice - see
-# scripts/run_training.py's training history: 400k-timestep runs converging to 0 trades).
-# A small standing cost for inaction means flat isn't quite free either, so a genuinely
-# edge-having trade (even a subtle one) can look better than the alternative on balance.
-DEFAULT_FLAT_PENALTY_BPS = 0.1
+# A per-step cost for sitting flat - deliberately smaller than TRANSACTION_COST_BPS (1.0) so it
+# never makes a bad trade look good, but large enough to meaningfully outweigh a typical hourly
+# log-return. Its job is to break "always flat" as a stable zero-reward equilibrium: with pure
+# P&L reward, once PPO discovers most trades lose to costs, staying flat forever scores exactly 0
+# and nothing in the reward signal ever pushes it to reconsider (observed repeatedly in practice -
+# see scripts/run_training.py's training history: 400k-timestep runs converging to 0 trades).
+# Raised from 0.1 to 0.3 (2026-09-19) to push future tournament winners toward trading more
+# often - live models were validated but signaling only every 2-5 days per pair, which is too
+# slow to accumulate the trade history the self-improvement loop needs to learn from. Still an
+# order of magnitude below the transaction cost, so it nudges frequency without paying for
+# obviously-losing churn.
+DEFAULT_FLAT_PENALTY_BPS = 0.3
 DEFAULT_REWARD_MODE = "differential_sharpe"
 DEFAULT_DSR_ETA = 0.02  # EMA decay for the running return-moment estimates; ~50-step effective window
 DSR_VARIANCE_FLOOR = 1e-8  # guards the Sharpe denominator before enough steps have built up real variance
