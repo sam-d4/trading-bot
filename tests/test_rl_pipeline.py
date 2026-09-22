@@ -35,3 +35,5 @@ def test_pretrain_finetune_validate_pipeline_runs_end_to_end():
     assert "sharpe" in outcome.candidate_metrics
     assert "buy_and_hold" in outcome.comparison_metrics
     assert "best_baseline" in outcome.comparison_metrics
+    assert "library_strategies" in outcome.comparison_metrics
+    assert "lib_ma_crossover" in outcome.comparison_metrics["library_strategies"]

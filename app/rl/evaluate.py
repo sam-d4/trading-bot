@@ -5,6 +5,17 @@ the candidate never trained on - and requires it to beat buy-and-hold, the best 
 strategy library, AND the currently-live model (when one exists) before it can pass. A candidate
 that fails is rejected and the live model is left untouched; only a pass makes it eligible for
 promotion (still subject to the manual-confirmation setting - see app/rl/registry.py).
+
+Also reports (informational only, not gated on) how a small set of well-known published
+strategies (app/strategy/library.py) would have done on the same holdout window - added after
+backtesting all 10 of that library's strategies found none with a stable in-sample edge (see
+scripts/backtest_strategy_library.py's findings). They're surfaced here for context on every
+future validation result rather than silently dropped, but deliberately NOT added to
+must_beat_best_baseline or to the RL behavior-cloning teacher set: doing either would require
+adding their indicator columns (ema50/ema200/psar) to app/data/features.py's compute_features(),
+which is read by feature_columns_for() to reconstruct a LIVE model's expected input shape on
+every restart/hot-swap - changing it would silently break the currently-live models trained
+before this change. See add_extended_indicators()'s own docstring for that scope boundary.
 """
 
 from dataclasses import dataclass, field
@@ -14,6 +25,7 @@ import pandas as pd
 from app.backtest.engine import buy_and_hold_result, run_backtest
 from app.strategy.base import Strategy
 from app.strategy.baselines import default_baseline_strategies
+from app.strategy.library import MACrossoverStrategy, ParabolicSARStrategy, add_extended_indicators
 
 
 @dataclass
@@ -73,10 +85,17 @@ def validate_candidate(
     if thresholds.must_beat_best_baseline and metrics["sharpe"] <= best_baseline_metrics["sharpe"]:
         reasons.append(f"did not beat best baseline strategy ({best_baseline_name}) on Sharpe")
 
+    enriched = add_extended_indicators(out_of_sample_features)
+    library_results = {
+        s.name: run_backtest(enriched, s, granularity=granularity).metrics
+        for s in (MACrossoverStrategy(), ParabolicSARStrategy())
+    }
+
     comparison = {
         "buy_and_hold": bh_result.metrics,
         "best_baseline": {"name": best_baseline_name, **best_baseline_metrics},
         "live_model": None,
+        "library_strategies": library_results,
     }
 
     if live_model_strategy is not None:

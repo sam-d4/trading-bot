@@ -22,6 +22,7 @@ interface PassedMetrics {
     buy_and_hold: StrategyMetrics
     best_baseline: StrategyMetrics & { name: string }
     live_model: StrategyMetrics | null
+    library_strategies?: Record<string, StrategyMetrics>
   }
 }
 
@@ -123,6 +124,16 @@ export function TrainingPanel({ models, pending, onPromote, onReject, busyModelI
                             <td className="num text-dim">{passed.comparison.live_model.trade_count}</td>
                           </tr>
                         )}
+                        {passed.comparison.library_strategies &&
+                          Object.entries(passed.comparison.library_strategies).map(([name, m]) => (
+                            <tr key={name}>
+                              <td className="text-dim">{name} (reference only)</td>
+                              <td className="num text-dim">{fmtNum(m.sharpe)}</td>
+                              <td className="num text-dim">{fmtNum(m.total_return_pct)}</td>
+                              <td className="num text-dim">{fmtNum(m.max_drawdown_pct)}</td>
+                              <td className="num text-dim">{m.trade_count}</td>
+                            </tr>
+                          ))}
                       </tbody>
                     </table>
                   </div>
