@@ -1,10 +1,12 @@
 import datetime as dt
 
+import pandas as pd
 import pytest
 
+import app.core.engine as engine_module
 from app.broker.models import Tick
 from app.config.settings import Settings
-from app.core.engine import TradingEngine
+from app.core.engine import BAR_HISTORY_LEN, TradingEngine
 from app.execution.order_manager import OrderManager
 from app.notifications.alerts import AlertSender
 from app.risk.limits import RiskLimits
@@ -106,3 +108,26 @@ def test_resolve_account_to_quote_rate_falls_back_to_one_when_unavailable():
     # no bars tracked for any currency pair yet - GBP has no route to USD in rate_lookup
     rate = engine._resolve_account_to_quote_rate("EUR_USD", "GBP")
     assert rate == 1.0
+
+
+async def test_seed_bar_history_fills_bars_past_the_finalize_warmup_gate(monkeypatch):
+    """Regression test for a real bug: self._bars starts empty every process restart, and
+    _finalize_bar refuses to call strategy.decide() until BAR_HISTORY_LEN // 2 bars have
+    accumulated - purely from live ticks, that took over 8 days, and this project's live engine
+    had never once run that long uninterrupted. _seed_bar_history must clear that gate
+    immediately from OANDA's own recent-candle history, without needing any live ticks first."""
+    engine = _engine(bar_seconds=60)
+
+    def fake_fetch_candles(settings, instrument, granularity, start, end):
+        rows = [
+            {"time": start + dt.timedelta(hours=i), "open": 1.1, "high": 1.1005, "low": 1.0995, "close": 1.1, "volume": 10}
+            for i in range(BAR_HISTORY_LEN + 50)
+        ]
+        return pd.DataFrame(rows)
+
+    monkeypatch.setattr(engine_module, "fetch_candles", fake_fetch_candles)
+
+    await engine._seed_bar_history()
+
+    assert len(engine._bars["EUR_USD"]) == BAR_HISTORY_LEN  # capped by the deque's maxlen
+    assert len(engine._bars["EUR_USD"]) >= BAR_HISTORY_LEN // 2  # clears _finalize_bar's warmup gate

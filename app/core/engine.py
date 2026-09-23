@@ -49,6 +49,7 @@ from app.broker.oanda_client import OandaClient, OandaClientError
 from app.broker.oanda_stream import OandaPriceStream
 from app.config.settings import Settings
 from app.core.events import Event, EventType, event_bus
+from app.data.candles import CandleFetchError, fetch_candles
 from app.data.features import compute_features, related_instruments
 from app.execution.order_manager import OrderManager
 from app.execution.reconciliation import reconcile
@@ -103,6 +104,8 @@ class TradingEngine:
         self._carry_differential: dict[str, float] = dict.fromkeys(self._traded_instruments, 0.0)
 
     async def run(self) -> None:
+        await self._seed_bar_history()
+
         stream = OandaPriceStream(self._settings, self._all_instruments)
         tick_queue = stream.ticks()
 
@@ -121,6 +124,36 @@ class TradingEngine:
             )
         finally:
             stream.stop()
+
+    async def _seed_bar_history(self) -> None:
+        """Pre-populates self._bars from OANDA's own recent candle history so the engine can
+        reach _finalize_bar's BAR_HISTORY_LEN // 2 warmup threshold immediately on startup,
+        instead of needing that many hours of pure live-tick accumulation from an empty deque.
+
+        This was a real, confirmed bug (not just "low signal frequency"): self._bars starts
+        empty every process restart, and a restart for a routine deploy/config change is not
+        rare - across this project's actual restart history, the live engine had NEVER once
+        gone 200+ consecutive hours (8.3+ days) without a restart, meaning _finalize_bar's
+        warmup gate had never once been satisfied and strategy.decide() had never once been
+        called live, for any traded pair, despite the dashboard showing live models assigned
+        the whole time. Found by tracing exactly why zero trades had executed after over a
+        week live. Fetches fresh from OANDA (not the local historical/*.parquet cache, which is
+        refreshed manually and can be many days stale - see scripts/fetch_historical_data.py) so
+        there's no gap between seeded history and the first live tick.
+        """
+        now = dt.datetime.now(dt.timezone.utc)
+        start = now - dt.timedelta(days=30)  # generous margin over weekends/holidays for BAR_HISTORY_LEN H1 candles
+        for inst in self._all_instruments:
+            try:
+                candles = await asyncio.to_thread(fetch_candles, self._settings, inst, "H1", start, now)
+            except CandleFetchError as exc:
+                log.warning("bar_history_seed_failed", instrument=inst, error=str(exc))
+                continue
+            if candles.empty:
+                continue
+            recent = candles.tail(BAR_HISTORY_LEN)
+            self._bars[inst].extend(recent.to_dict("records"))
+            log.info("bar_history_seeded", instrument=inst, bars=len(self._bars[inst]))
 
     # --- bar aggregation + strategy decisions -----------------------------------------------
 

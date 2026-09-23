@@ -130,6 +130,18 @@ with its own independently-promotable strategy (`dict[instrument, Strategy]`), s
 - a per-instrument hot-swap poll (`_poll_live_model_swap`) that loads a newly-promoted model for
   *that* instrument without restarting the process or touching the others
 
+`run()` calls `_seed_bar_history()` before touching the price stream, pre-filling `self._bars`
+from OANDA's own recent-candle history (not the local `historical/*.parquet` cache, which is
+refreshed manually and can be stale). Without this, `self._bars` starts empty on every process
+restart and `_finalize_bar`'s warmup gate (`BAR_HISTORY_LEN // 2` = 200 bars) has to be rebuilt
+from live ticks alone — 200+ consecutive hours (8.3+ days) with no restart. This was a real,
+shipped bug: across this project's actual restart cadence (routine deploys/config changes,
+nowhere near rare), the engine had never once gone 8.3 days without a restart, so
+`strategy.decide()` had never once actually been called live for any traded pair — despite the
+dashboard showing live models assigned the whole time — until this fix. If you ever see a live
+pair go a suspiciously long time with zero trades, check `bar_history_seeded` fired for it at the
+most recent startup before assuming the strategy itself is just low-frequency.
+
 `app/execution/order_manager.py` refuses orders while halted (duplicating the risk manager's own
 check as defense in depth) and enforces "no pyramiding" (a same-direction repeat signal is a
 no-op; a reversal closes then reopens). `app/execution/reconciliation.py` periodically re-syncs
