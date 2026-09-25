@@ -102,3 +102,23 @@ def test_flatten_all_closes_every_open_trade(db_session):
     assert len(repo.open_trades(db_session)) == 0
     closed = repo.recent_trades(db_session)
     assert closed[0].status == TradeStatus.CLOSED
+
+
+def test_closed_trade_records_oandas_account_currency_pl_not_quote_currency_pnl(db_session):
+    """Regression: (exit - entry) * units is in the pair's QUOTE currency (JPY for USD_JPY), not the
+    account's - a small JPY loss was recorded as a large account-currency loss."""
+    om, client, _ = _order_manager()
+    om.execute_signal(
+        db_session, instrument="EUR_USD", direction=1, price=1.10, atr=0.0015, equity=10_000, strategy_name="test"
+    )
+    original_close = client.close_trade
+
+    def close_with_account_pl(trade_id):
+        result = original_close(trade_id)
+        result.raw = {"orderFillTransaction": {"pl": "-3.25"}}
+        return result
+
+    client.close_trade = close_with_account_pl
+    om.flatten_all(db_session)
+
+    assert repo.recent_trades(db_session)[0].realized_pnl == -3.25

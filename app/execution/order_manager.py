@@ -121,7 +121,16 @@ class OrderManager:
         now = dt.datetime.now(dt.timezone.utc)
         exit_price = result.fill_price or trade.entry_price
         direction_sign = 1 if trade.direction == TradeDirection.LONG else -1
-        realized_pnl = direction_sign * (exit_price - trade.entry_price) * trade.units
+        # OANDA's own realised P/L is in the ACCOUNT currency. The local (exit-entry)*units is in
+        # the pair's QUOTE currency (JPY for USD_JPY, USD for AUD_USD), so on a GBP account it was
+        # recorded as if it were GBP - a 1,133 JPY loss showed as a 7,153 "loss" on the dashboard.
+        fill = (result.raw or {}).get("orderFillTransaction", {})
+        oanda_pl = fill.get("pl")
+        realized_pnl = (
+            float(oanda_pl)
+            if oanda_pl is not None
+            else direction_sign * (exit_price - trade.entry_price) * trade.units
+        )
 
         repo.record_trade_closed(
             session,
