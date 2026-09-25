@@ -131,3 +131,23 @@ async def test_seed_bar_history_fills_bars_past_the_finalize_warmup_gate(monkeyp
 
     assert len(engine._bars["EUR_USD"]) == BAR_HISTORY_LEN  # capped by the deque's maxlen
     assert len(engine._bars["EUR_USD"]) >= BAR_HISTORY_LEN // 2  # clears _finalize_bar's warmup gate
+
+
+async def test_supervised_restarts_a_loop_that_raises(monkeypatch):
+    """Regression test: an uncaught exception in one engine loop used to end it for the life of
+    the process (while the others kept running and the dashboard still said "engine running")."""
+    engine = _engine(bar_seconds=60)
+    calls = {"n": 0}
+
+    async def flaky():
+        calls["n"] += 1
+        if calls["n"] < 3:
+            raise ConnectionError("network blip")
+
+    async def no_sleep(_):
+        return None
+
+    monkeypatch.setattr(engine_module.asyncio, "sleep", no_sleep)
+    await engine._supervised("flaky", flaky)
+
+    assert calls["n"] == 3

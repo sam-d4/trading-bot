@@ -142,6 +142,15 @@ dashboard showing live models assigned the whole time — until this fix. If you
 pair go a suspiciously long time with zero trades, check `bar_history_seeded` fired for it at the
 most recent startup before assuming the strategy itself is just low-frequency.
 
+Resilience: every long-running loop in `run()` is wrapped in `_supervised()` (restarts on any
+uncaught exception), `OandaPriceStream._run` reconnects with capped backoff and uses a 30s read
+timeout (OANDA heartbeats every ~5s, so a silently-dead connection raises instead of hanging),
+and `OandaClient` has a 15s request timeout. This was a real outage: a single network blip ended
+the stream thread / a polling loop permanently, so the process stayed up and `/healthz` stayed
+OK while trading, NAV polling and the drawdown kill-switch were dead for ~2 days with two open
+positions unwatched. `/healthz` and `engine_running` do NOT prove the loops are alive — check that
+`equity_snapshots` are still being written (`GET /api/equity?hours=1`).
+
 `app/execution/order_manager.py` refuses orders while halted (duplicating the risk manager's own
 check as defense in depth) and enforces "no pyramiding" (a same-direction repeat signal is a
 no-op; a reversal closes then reopens). `app/execution/reconciliation.py` periodically re-syncs
@@ -157,8 +166,8 @@ against OANDA's own account state, which is always the source of truth — the l
   `max_leverage`. Has an `account_to_quote_rate` parameter because the account's currency and an
   instrument's quote currency aren't always the same (this was a real, previously-shipped bug on
   a GBP account trading EUR_USD/USD-quoted pairs) — `resolve_account_to_quote_rate()` resolves it
-  from whatever cross-rate is currently tracked in the engine's own bars, falling back to `1.0`
-  with a loud warning rather than crashing the live loop.
+  from whatever cross-rate is currently tracked in the engine's own bars, crossing through USD when there's no direct pair (GBP account → JPY-quoted USD_JPY = GBP_USD × USD_JPY), and falling back to `1.0`
+  with a loud warning only if even that fails.
 - `RiskLimits.from_settings()` divides `risk_per_trade_pct` by the number of traded instruments,
   so adding pairs spreads the same aggregate risk budget rather than multiplying it.
 

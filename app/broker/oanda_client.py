@@ -27,7 +27,7 @@ class OandaClient:
         self._settings = settings
         self._account_id = settings.oanda_account_id
         environment = "practice" if settings.oanda_environment == "practice" else "live"
-        self._api = API(access_token=settings.oanda_api_token, environment=environment)
+        self._api = API(access_token=settings.oanda_api_token, environment=environment, request_params={"timeout": 15})
 
     def get_account_summary(self) -> AccountSummary:
         req = AccountSummaryEndpoint(accountID=self._account_id)

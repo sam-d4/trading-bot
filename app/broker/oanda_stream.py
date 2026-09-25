@@ -36,7 +36,11 @@ class OandaPriceStream:
         self._settings = settings
         self._instruments = instruments
         environment = "practice" if settings.oanda_environment == "practice" else "live"
-        self._api = API(access_token=settings.oanda_api_token, environment=environment)
+        # OANDA sends a heartbeat every ~5s, so a 30s read timeout means a silently-dead
+        # connection raises (and gets reconnected) instead of hanging the thread forever.
+        self._api = API(
+            access_token=settings.oanda_api_token, environment=environment, request_params={"timeout": 30}
+        )
         self._req: PricingStreamEndpoint | None = None
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -49,9 +53,6 @@ class OandaPriceStream:
         loop = asyncio.get_event_loop()
         queue: asyncio.Queue[Tick] = asyncio.Queue(maxsize=1000)
 
-        self._req = PricingStreamEndpoint(
-            accountID=self._settings.oanda_account_id, params={"instruments": ",".join(self._instruments)}
-        )
         self._thread = threading.Thread(target=self._run, args=(loop, queue), daemon=True)
         self._thread.start()
         return queue
@@ -64,16 +65,32 @@ class OandaPriceStream:
             except Exception:  # pragma: no cover - best-effort, oandapyV20 internals not guaranteed
                 pass
 
+    def _new_request(self) -> PricingStreamEndpoint:
+        return PricingStreamEndpoint(
+            accountID=self._settings.oanda_account_id, params={"instruments": ",".join(self._instruments)}
+        )
+
     def _run(self, loop: asyncio.AbstractEventLoop, queue: asyncio.Queue) -> None:
-        try:
-            for raw in self._api.request(self._req):
-                if self._stop_event.is_set():
-                    break
-                tick = _parse_tick(raw)
-                if tick is not None:
-                    loop.call_soon_threadsafe(_put_nowait_drop_oldest, queue, tick)
-        except Exception as exc:  # noqa: BLE001 - any stream failure should surface, not crash the thread silently
-            log.error("price_stream_error", instruments=self._instruments, error=str(exc))
+        """Reconnects with capped exponential backoff on any failure or clean stream end - a
+        single network blip used to end this thread permanently, silently killing all live
+        trading (the engine only alerts, it can't restart a thread that has exited)."""
+        backoff = 1.0
+        while not self._stop_event.is_set():
+            self._req = self._new_request()
+            try:
+                for raw in self._api.request(self._req):
+                    if self._stop_event.is_set():
+                        return
+                    backoff = 1.0
+                    tick = _parse_tick(raw)
+                    if tick is not None:
+                        loop.call_soon_threadsafe(_put_nowait_drop_oldest, queue, tick)
+                log.warning("price_stream_ended_reconnecting", instruments=self._instruments)
+            except Exception as exc:  # noqa: BLE001 - any stream failure should reconnect, not kill the thread
+                log.error("price_stream_error_reconnecting", instruments=self._instruments, error=str(exc), retry_in=backoff)
+            if self._stop_event.wait(backoff):
+                return
+            backoff = min(backoff * 2, 60.0)
 
 
 def _parse_tick(raw: dict | str) -> Tick | None:

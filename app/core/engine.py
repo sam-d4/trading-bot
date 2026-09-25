@@ -116,11 +116,11 @@ class TradingEngine:
         )
         try:
             await asyncio.gather(
-                self._consume_ticks(tick_queue),
-                self._poll_kill_switch(),
-                self._poll_reconciliation(),
-                self._poll_live_model_swap(),
-                self._poll_carry_rate(),
+                self._supervised("consume_ticks", lambda: self._consume_ticks(tick_queue)),
+                self._supervised("poll_kill_switch", self._poll_kill_switch),
+                self._supervised("poll_reconciliation", self._poll_reconciliation),
+                self._supervised("poll_live_model_swap", self._poll_live_model_swap),
+                self._supervised("poll_carry_rate", self._poll_carry_rate),
             )
         finally:
             stream.stop()
@@ -154,6 +154,21 @@ class TradingEngine:
             recent = candles.tail(BAR_HISTORY_LEN)
             self._bars[inst].extend(recent.to_dict("records"))
             log.info("bar_history_seeded", instrument=inst, bars=len(self._bars[inst]))
+
+    async def _supervised(self, name: str, factory) -> None:
+        """Restarts a long-running loop if it ever raises. Before this, any uncaught exception
+        (a raw network error from a REST call, a bad bar in a strategy) ended that loop for the
+        life of the process while the rest kept running - the dashboard still said "engine
+        running" while trading, NAV polling and the drawdown kill-switch were silently dead."""
+        while True:
+            try:
+                await factory()
+                return
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                log.exception("engine_task_crashed_restarting", task=name, error=str(exc))
+                await asyncio.sleep(5)
 
     # --- bar aggregation + strategy decisions -----------------------------------------------
 

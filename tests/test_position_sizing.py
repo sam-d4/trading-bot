@@ -87,3 +87,9 @@ class TestResolveAccountToQuoteRate:
     def test_raises_when_no_rate_available(self):
         with pytest.raises(ValueError):
             resolve_account_to_quote_rate("CHF", "JPY", {"GBP_USD": 1.35})
+
+    def test_crosses_through_usd_when_no_direct_pair(self):
+        # GBP account trading USD_JPY: no GBP_JPY tracked, so GBP->USD->JPY. Previously this
+        # raised and the engine fell back to 1.0, undersizing every USD_JPY trade ~200x.
+        rate = resolve_account_to_quote_rate("GBP", "JPY", {"GBP_USD": 1.35, "USD_JPY": 158.0})
+        assert rate == pytest.approx(1.35 * 158.0)

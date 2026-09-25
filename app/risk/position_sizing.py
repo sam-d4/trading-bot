@@ -71,13 +71,25 @@ def resolve_account_to_quote_rate(
     if account_currency == quote_currency:
         return 1.0
 
-    direct = f"{account_currency}_{quote_currency}"
-    if direct in rate_lookup:
-        return rate_lookup[direct]
+    def pair_rate(base: str, quote: str) -> float | None:
+        if f"{base}_{quote}" in rate_lookup:
+            return rate_lookup[f"{base}_{quote}"]
+        if f"{quote}_{base}" in rate_lookup:
+            return 1.0 / rate_lookup[f"{quote}_{base}"]
+        return None
 
+    direct = f"{account_currency}_{quote_currency}"
     inverse = f"{quote_currency}_{account_currency}"
-    if inverse in rate_lookup:
-        return 1.0 / rate_lookup[inverse]
+    rate = pair_rate(account_currency, quote_currency)
+    if rate is not None:
+        return rate
+
+    # No direct pair (e.g. GBP account, JPY-quoted USD_JPY: there is no GBP_JPY in the tracked
+    # set) - cross through USD, which every tracked pair trades against.
+    to_usd = pair_rate(account_currency, "USD")
+    usd_to_quote = pair_rate("USD", quote_currency)
+    if to_usd is not None and usd_to_quote is not None:
+        return to_usd * usd_to_quote
 
     raise ValueError(
         f"no conversion rate available for {account_currency} -> {quote_currency} "
