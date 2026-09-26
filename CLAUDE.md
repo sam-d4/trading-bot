@@ -97,6 +97,14 @@ instrument on a staggered rotation — same tournament pipeline, run by hand.
   time, which can crash or hang scanning system fonts on some macOS setups. `app/rl/__init__.py`
   and `app/strategy/rl_policy.py` both set `MPL_IGNORE_SYSTEM_FONTS=1` before that import as a
   fix — keep that if you touch either file's imports.
+- `.gitignore` anchors the runtime data dir as `/data/` (repo root: SQLite DB + cached candle
+  parquet). It was originally an unanchored `data/`, which ALSO matched the `app/data/` source
+  package, so `features.py`/`candles.py`/`enrichment.py`/`store.py` silently went uncommitted and
+  the pushed repo couldn't run. If a new source directory ever fails to show up in `git status`,
+  run `git check-ignore -v <path>` before assuming it's tracked.
+- The Mac sleeps/wakes repeatedly while the bot runs, dropping every network connection. The
+  engine tolerates this (supervised loops, stream reconnect, request timeouts), and `RemoteDisconnected`
+  errors in the log right after a wake are expected, not a bug. Bars/decisions are missed while asleep.
 - `pandas-ta` was tried and dropped (stale release, hung under this project's pandas version).
   `app/data/features.py`'s indicators (EMA/RSI/ATR/z-score) are hand-rolled on purpose — don't
   reach for `pandas-ta` to "simplify" them.

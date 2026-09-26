@@ -145,8 +145,10 @@ class TradingEngine:
         start = now - dt.timedelta(days=30)  # generous margin over weekends/holidays for BAR_HISTORY_LEN H1 candles
         for inst in self._all_instruments:
             try:
-                candles = await asyncio.to_thread(fetch_candles, self._settings, inst, "H1", start, now)
-            except CandleFetchError as exc:
+                candles = await asyncio.wait_for(
+                    asyncio.to_thread(fetch_candles, self._settings, inst, "H1", start, now), timeout=90
+                )
+            except (CandleFetchError, TimeoutError, OSError) as exc:  # never let seeding block engine startup
                 log.warning("bar_history_seed_failed", instrument=inst, error=str(exc))
                 continue
             if candles.empty:

@@ -5,7 +5,7 @@ venv/
 *.egg-info/
 
 .env
-data/
+/data/
 models/
 *.db
 *.sqlite3
