@@ -86,6 +86,20 @@ def record_trade_closed(
     return trade
 
 
+def reopen_trade(session: Session, oanda_trade_id: str) -> Trade | None:
+    """Undo a wrongly-recorded close: the local row says CLOSED but OANDA still has the trade open."""
+    trade = session.scalars(select(Trade).where(Trade.oanda_trade_id == oanda_trade_id)).first()
+    if trade is None:
+        return None
+    trade.status = TradeStatus.OPEN
+    trade.exit_price = None
+    trade.closed_at = None
+    trade.realized_pnl = None
+    session.commit()
+    session.refresh(trade)
+    return trade
+
+
 def recent_trades(session: Session, *, limit: int = 200) -> list[Trade]:
     stmt = select(Trade).order_by(Trade.opened_at.desc()).limit(limit)
     return list(session.scalars(stmt))

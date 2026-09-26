@@ -36,6 +36,11 @@ def reconcile(session: Session, client: OandaClient) -> None:
     for remote_trade in remote_open:
         if remote_trade.trade_id in local_ids:
             continue
+        # We DO have a row for it, but it says CLOSED while OANDA still has it open - a close that
+        # was recorded locally without ever filling at OANDA. Trust OANDA and reopen the row.
+        if repo.reopen_trade(session, remote_trade.trade_id) is not None:
+            log.error("reopened_trade_wrongly_recorded_closed", trade_id=remote_trade.trade_id)
+            continue
         # OANDA has an open trade we have no local record of (e.g. after a crash mid-order).
         # Adopt it so the dashboard reflects reality, tagged as untracked.
         log.warning("adopting_untracked_open_trade", trade_id=remote_trade.trade_id)

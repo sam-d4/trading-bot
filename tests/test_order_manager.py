@@ -122,3 +122,41 @@ def test_closed_trade_records_oandas_account_currency_pl_not_quote_currency_pnl(
     om.flatten_all(db_session)
 
     assert repo.recent_trades(db_session)[0].realized_pnl == -3.25
+
+
+def test_close_with_no_fill_leaves_trade_open_instead_of_recording_a_fake_close(db_session):
+    """Regression: a close that never filled at OANDA was recorded locally as closed at entry price
+    with zero P&L, while a 1.9M-unit position stayed open at OANDA."""
+    om, client, _ = _order_manager()
+    om.execute_signal(
+        db_session, instrument="EUR_USD", direction=1, price=1.10, atr=0.0015, equity=10_000, strategy_name="test"
+    )
+    original_close = client.close_trade
+
+    def close_without_fill(trade_id):
+        result = original_close(trade_id)
+        result.fill_price = None
+        return result
+
+    client.close_trade = close_without_fill
+    om.flatten_all(db_session)
+
+    assert len(repo.open_trades(db_session)) == 1
+
+
+def test_reconcile_reopens_a_trade_recorded_closed_but_still_open_at_oanda(db_session):
+    from app.execution.reconciliation import reconcile
+
+    om, client, _ = _order_manager()
+    om.execute_signal(
+        db_session, instrument="EUR_USD", direction=1, price=1.10, atr=0.0015, equity=10_000, strategy_name="test"
+    )
+    trade = repo.open_trades(db_session)[0]
+    repo.record_trade_closed(
+        db_session, oanda_trade_id=trade.oanda_trade_id, exit_price=1.10, closed_at=dt.datetime.now(dt.timezone.utc), realized_pnl=0.0
+    )
+    assert repo.open_trades(db_session) == []  # local says closed; the fake client still holds it open
+
+    reconcile(db_session, client)
+
+    assert [t.oanda_trade_id for t in repo.open_trades(db_session)] == [trade.oanda_trade_id]

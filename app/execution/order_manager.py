@@ -118,8 +118,15 @@ class OrderManager:
             log.error("trade_close_failed", trade_id=trade.oanda_trade_id, error=str(exc), reason=reason)
             return
 
+        if result.fill_price is None:
+            # No fill transaction came back, so OANDA did NOT close it. Recording a close here left
+            # a 1.9M-unit position open at OANDA while the dashboard showed none; leave the row
+            # open and let the next signal / reconciliation pass retry.
+            log.error("trade_close_not_filled", trade_id=trade.oanda_trade_id, reason=reason, raw=result.raw)
+            return
+
         now = dt.datetime.now(dt.timezone.utc)
-        exit_price = result.fill_price or trade.entry_price
+        exit_price = result.fill_price
         direction_sign = 1 if trade.direction == TradeDirection.LONG else -1
         # OANDA's own realised P/L is in the ACCOUNT currency. The local (exit-entry)*units is in
         # the pair's QUOTE currency (JPY for USD_JPY, USD for AUD_USD), so on a GBP account it was
