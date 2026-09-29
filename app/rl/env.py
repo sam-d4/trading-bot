@@ -47,12 +47,13 @@ TRANSACTION_COST_BPS = 1.0
 # P&L reward, once PPO discovers most trades lose to costs, staying flat forever scores exactly 0
 # and nothing in the reward signal ever pushes it to reconsider (observed repeatedly in practice -
 # see scripts/run_training.py's training history: 400k-timestep runs converging to 0 trades).
-# Raised from 0.1 to 0.3 (2026-09-19) to push future tournament winners toward trading more
-# often - live models were validated but signaling only every 2-5 days per pair, which is too
-# slow to accumulate the trade history the self-improvement loop needs to learn from. Still an
-# order of magnitude below the transaction cost, so it nudges frequency without paying for
-# obviously-losing churn.
-DEFAULT_FLAT_PENALTY_BPS = 0.3
+# Raised 0.1 -> 0.3 (2026-09-19), then 0.3 -> 0.6 (2026-09-29): even at 0.3, live models still
+# only signaled every 1-3 days per pair - not frequent enough for the user's stated preference of
+# more active trading. 0.6 is still below TRANSACTION_COST_BPS (1.0), so a flat step is still
+# always cheaper than churning into an obviously bad trade - it just makes staying flat a much
+# less comfortable default than before, biasing future tournament winners toward acting on
+# thinner edges than they previously would have.
+DEFAULT_FLAT_PENALTY_BPS = 0.6
 DEFAULT_REWARD_MODE = "differential_sharpe"
 DEFAULT_DSR_ETA = 0.02  # EMA decay for the running return-moment estimates; ~50-step effective window
 DSR_VARIANCE_FLOOR = 1e-8  # guards the Sharpe denominator before enough steps have built up real variance

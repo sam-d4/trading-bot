@@ -16,12 +16,14 @@ for ONE instrument:
 
 Scheduling: one job per traded instrument, each on an interval of
 interval_hours * len(traded_instruments), with staggered start times spaced interval_hours apart
-- e.g. 4 instruments at interval_hours=2 means each individual pair retrains every 8 hours, but
+- e.g. 4 instruments at interval_hours=1 means each individual pair retrains every 4 hours, but
 the four jobs are offset so only one retrain (one tournament's worth of PPO training) is ever
 running at a time, rather than quadrupling the background CPU load every cycle. Retraining every
 pair "more often" would mean either accepting that higher constant load or shortening
-interval_hours - a deliberate tradeoff, not an oversight. (Shortened from 4.0 to 2.0 on
-2026-09-19 to speed up the self-improvement cadence.)
+interval_hours - a deliberate tradeoff, not an oversight. (4.0 -> 2.0 on 2026-09-19, then
+2.0 -> 1.0 on 2026-09-29, both to speed up the self-improvement cadence - the second change paired
+with env.py's flat-penalty increase to 0.6 so higher-frequency candidates reach the validation
+gate sooner rather than waiting up to 8h for their first shot at beating the live model.)
 """
 
 import datetime as dt
@@ -160,7 +162,7 @@ def run_retrain_cycle(
 
 
 def start_retrain_scheduler(
-    settings: Settings, alerts: AlertSender, *, interval_hours: float = 2.0
+    settings: Settings, alerts: AlertSender, *, interval_hours: float = 1.0
 ) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
     instruments = settings.traded_instruments

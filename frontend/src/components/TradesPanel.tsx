@@ -18,6 +18,18 @@ function pnlClass(pnl: number | null): string {
   return pnl >= 0 ? 'text-green' : 'text-red'
 }
 
+function quoteCurrency(instrument: string): string {
+  return instrument.split('_')[1] ?? ''
+}
+
+// units * price is the notional value in the pair's QUOTE currency (e.g. JPY for USD_JPY), not
+// the account currency - labelled with that currency's code so it isn't mistaken for GBP.
+function fmtNotional(units: number, price: number | null, instrument: string): string {
+  if (price === null) return '—'
+  const value = units * price
+  return `${value.toLocaleString(undefined, { maximumFractionDigits: 0 })} ${quoteCurrency(instrument)}`
+}
+
 function DirectionTag({ direction }: { direction: 'long' | 'short' }) {
   const isLong = direction === 'long'
   return <span className={`direction-tag ${isLong ? 'text-green' : 'text-red'}`}>{isLong ? '▲ LONG' : '▼ SHORT'}</span>
@@ -68,6 +80,7 @@ export function TradesPanel({ openPositions, recentTrades }: Props) {
                 <th>Direction</th>
                 <th>Units</th>
                 <th>Entry</th>
+                <th>Position value</th>
                 <th>Opened</th>
                 <th>Strategy</th>
               </tr>
@@ -81,6 +94,7 @@ export function TradesPanel({ openPositions, recentTrades }: Props) {
                   </td>
                   <td className="num">{t.units.toFixed(0)}</td>
                   <td className="num">{fmt(t.entry_price)}</td>
+                  <td className="num">{fmtNotional(t.units, t.entry_price, t.instrument)}</td>
                   <td>{new Date(t.opened_at).toLocaleString()}</td>
                   <td className="text-dim">{t.strategy_name}</td>
                 </tr>
@@ -130,6 +144,8 @@ export function TradesPanel({ openPositions, recentTrades }: Props) {
                 <th>Direction</th>
                 <th>Entry</th>
                 <th>Exit</th>
+                <th>Opened with</th>
+                <th>Closed at</th>
                 <th>P&amp;L</th>
                 <th>Status</th>
                 <th>Strategy / model</th>
@@ -145,6 +161,8 @@ export function TradesPanel({ openPositions, recentTrades }: Props) {
                   </td>
                   <td className="num">{fmt(t.entry_price)}</td>
                   <td className="num">{fmt(t.exit_price)}</td>
+                  <td className="num">{fmtNotional(t.units, t.entry_price, t.instrument)}</td>
+                  <td className="num">{t.status === 'closed' ? fmtNotional(t.units, t.exit_price, t.instrument) : '—'}</td>
                   <td className={`num ${pnlClass(t.realized_pnl)}`}>
                     {t.realized_pnl !== null ? t.realized_pnl.toFixed(2) : '—'}
                   </td>
