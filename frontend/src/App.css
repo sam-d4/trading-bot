@@ -407,6 +407,27 @@
   margin-top: 0;
 }
 
+.link-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+}
+
+.link-toggle h3 {
+  margin: 0;
+}
+
+.link-toggle:hover h3 {
+  color: var(--text);
+}
+
 .count-badge {
   background: var(--surface);
   color: var(--text-dim);
@@ -600,6 +621,12 @@
 .pnl-hero-value {
   font-size: 28px;
   font-weight: 700;
+}
+
+.pnl-hero-pct {
+  font-size: 16px;
+  font-weight: 600;
+  opacity: 0.75;
 }
 
 .stats-grid {

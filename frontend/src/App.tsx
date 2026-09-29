@@ -23,6 +23,7 @@ function App() {
   const [positions, setPositions] = useState<Trade[]>([])
   const [equity, setEquity] = useState<EquityPoint[]>([])
   const [equityHours, setEquityHours] = useState(24 * 7)
+  const [startingNav, setStartingNav] = useState<number | null>(null)
   const [models, setModels] = useState<ModelVersionSummary[]>([])
   const [pending, setPending] = useState<PendingPromotion[]>([])
   const [resetting, setResetting] = useState(false)
@@ -45,6 +46,15 @@ function App() {
     const interval = setInterval(refreshAll, 30_000) // REST poll fallback if the websocket drops
     return () => clearInterval(interval)
   }, [refreshAll])
+
+  useEffect(() => {
+    // The earliest-ever NAV snapshot, independent of the equity chart's selected zoom range -
+    // "% gained" should be from account inception, not from whatever window is on screen.
+    api
+      .equity(24 * 365 * 5)
+      .then((points) => setStartingNav(points.length > 0 ? points[0].nav : null))
+      .catch(() => {})
+  }, [])
 
   const handleLiveEvent = useCallback(
     (event: LiveEvent) => {
@@ -152,7 +162,7 @@ function App() {
 
       <div className="grid">
         <EquityChart points={equity} onRangeChange={setEquityHours} />
-        <PerformancePanel trades={trades} />
+        <PerformancePanel trades={trades} startingNav={startingNav} currentNav={status?.latest_nav ?? null} />
       </div>
 
       <TradesPanel openPositions={positions} recentTrades={trades} />

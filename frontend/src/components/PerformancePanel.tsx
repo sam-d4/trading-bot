@@ -2,6 +2,8 @@ import type { Trade } from '../api'
 
 interface Props {
   trades: Trade[]
+  startingNav: number | null
+  currentNav: number | null
 }
 
 function computeStats(closed: Trade[]) {
@@ -45,14 +47,15 @@ function computeStats(closed: Trade[]) {
   return { winRate, avgWin, avgLoss, profitFactor, totalPnl, tradeCount: pnls.length, bestWinStreak, worstLossStreak, currentStreak, currentStreakType }
 }
 
-export function PerformancePanel({ trades }: Props) {
+export function PerformancePanel({ trades, startingNav, currentNav }: Props) {
   const closed = trades.filter((t) => t.status === 'closed')
   const stats = computeStats(closed)
+  const pctGained = startingNav && currentNav ? ((currentNav - startingNav) / startingNav) * 100 : null
 
   return (
     <div className="panel">
       <h2>Performance</h2>
-      {stats.tradeCount === 0 ? (
+      {stats.tradeCount === 0 && pctGained === null ? (
         <div className="empty-state">No closed trades yet.</div>
       ) : (
         <>
@@ -61,6 +64,13 @@ export function PerformancePanel({ trades }: Props) {
             <div className={`pnl-hero-value num ${stats.totalPnl >= 0 ? 'text-green' : 'text-red'}`}>
               {stats.totalPnl >= 0 ? '+' : ''}
               {stats.totalPnl.toFixed(2)}
+              {pctGained !== null && (
+                <span className={`pnl-hero-pct num ${pctGained >= 0 ? 'text-green' : 'text-red'}`}>
+                  {' '}
+                  ({pctGained >= 0 ? '+' : ''}
+                  {pctGained.toFixed(2)}%)
+                </span>
+              )}
             </div>
           </div>
           <div className="stats-grid">

@@ -52,6 +52,7 @@ function sharpeClass(n: number | undefined): string {
 
 export function TrainingPanel({ models, pending, onPromote, onReject, busyModelId }: Props) {
   const [instrumentFilter, setInstrumentFilter] = useState<string>('all')
+  const [showHistory, setShowHistory] = useState(false)
 
   const instruments = useMemo(() => {
     const set = new Set(models.map((m) => m.instrument).filter((i): i is string => !!i))
@@ -153,8 +154,13 @@ export function TrainingPanel({ models, pending, onPromote, onReject, busyModelI
       )}
 
       <div className="panel-header panel-header-tight">
-        <h3 className="no-margin">Model history</h3>
-        {instruments.length > 2 && (
+        <button className="link-toggle" onClick={() => setShowHistory((v) => !v)}>
+          <h3 className="no-margin">
+            Model history <span className="count-badge">{models.length}</span>
+          </h3>
+          <span className="text-dim">{showHistory ? 'hide ▲' : 'show ▼'}</span>
+        </button>
+        {showHistory && instruments.length > 2 && (
           <div className="filter-tabs">
             {instruments.map((inst) => (
               <button
@@ -168,7 +174,7 @@ export function TrainingPanel({ models, pending, onPromote, onReject, busyModelI
           </div>
         )}
       </div>
-      {filteredModels.length === 0 ? (
+      {!showHistory ? null : filteredModels.length === 0 ? (
         <div className="empty-state">No models trained yet.</div>
       ) : (
         <div className="table-scroll">
