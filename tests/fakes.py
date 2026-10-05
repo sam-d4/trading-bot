@@ -12,6 +12,7 @@ class FakeOandaClient:
         self._open_trades: dict[str, OpenTrade] = {}
         self._next_trade_id = 1
         self.placed_orders: list[tuple[str, float]] = []
+        self.placed_stops: list[float | None] = []
         self.closed_trade_ids: list[str] = []
         self.trade_details: dict[str, dict] = {}
 
@@ -31,8 +32,9 @@ class FakeOandaClient:
     def get_open_trades(self) -> list[OpenTrade]:
         return list(self._open_trades.values())
 
-    def place_market_order(self, instrument: str, units: float) -> OrderResult:
+    def place_market_order(self, instrument: str, units: float, stop_distance: float | None = None) -> OrderResult:
         self.placed_orders.append((instrument, units))
+        self.placed_stops.append(stop_distance)
         trade_id = str(self._next_trade_id)
         self._next_trade_id += 1
         fill_price = 1.1000
@@ -60,11 +62,16 @@ class FakeOandaClient:
 
     # --- test helpers, not part of the real OandaClient interface -----------------------------
 
-    def remove_open_trade_remotely(self, trade_id: str, *, realized_pnl: float = 0.0) -> None:
+    def remove_open_trade_remotely(
+        self, trade_id: str, *, realized_pnl: float = 0.0, average_close_price: float | None = None
+    ) -> None:
         """Simulates OANDA closing a trade on its own (stop-out, margin closeout) without going
         through place_market_order/close_trade - used to test reconciliation."""
         self._open_trades.pop(trade_id, None)
-        self.trade_details[trade_id] = {"id": trade_id, "state": "CLOSED", "realizedPL": str(realized_pnl)}
+        detail = {"id": trade_id, "state": "CLOSED", "realizedPL": str(realized_pnl)}
+        if average_close_price is not None:
+            detail["averageClosePrice"] = str(average_close_price)
+        self.trade_details[trade_id] = detail
 
     def add_untracked_open_trade(self, trade_id: str, instrument: str, units: float, price: float) -> None:
         """Simulates a trade OANDA has open that this process never recorded locally (e.g. after

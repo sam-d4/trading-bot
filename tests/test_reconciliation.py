@@ -69,3 +69,20 @@ def test_reconcile_handles_fetch_failure_gracefully(db_session):
     client = BrokenClient()
     reconcile(db_session, client)  # should not raise
     assert len(repo.open_trades(db_session)) == 0
+
+
+def test_reconcile_uses_oandas_average_close_price_not_a_value_backed_out_of_account_currency_pnl(db_session):
+    """Server-side stop-outs land here. realizedPL is in the account currency (GBP), so backing a
+    price out of it is wrong for any non-GBP quote - 'pnl / units' gave a price ~35% off for USD
+    pairs and ~200x off for JPY pairs."""
+    client = FakeOandaClient()
+    om = OrderManager(client, RiskManager(LIMITS), LIMITS)
+    om.execute_signal(
+        db_session, instrument="EUR_USD", direction=1, price=1.10, atr=0.0015, equity=10_000, strategy_name="test"
+    )
+    trade_id = next(iter(client._open_trades))
+
+    client.remove_open_trade_remotely(trade_id, realized_pnl=-30.0, average_close_price=1.0971)
+    reconcile(db_session, client)
+
+    assert repo.recent_trades(db_session)[0].exit_price == 1.0971

@@ -12,8 +12,9 @@ from sqlalchemy.orm import Session
 from app.broker.models import OrderResult
 from app.broker.oanda_client import OandaClient, OandaClientError
 from app.core.events import Event, EventType, event_bus
+from app.execution.reconciliation import _reconcile_locally_open_but_remotely_closed
 from app.persistence import repo
-from app.persistence.models import TradeDirection
+from app.persistence.models import TradeDirection, TradeStatus
 from app.risk.manager import RiskManager
 from app.risk.position_sizing import size_position
 from app.risk.limits import RiskLimits
@@ -51,7 +52,10 @@ class OrderManager:
             currently_long = existing_for_instrument.direction == TradeDirection.LONG
             wants_long = direction > 0
             if direction == 0 or currently_long != wants_long:
-                self._close_local_trade(session, existing_for_instrument, reason="signal_reversed_or_flat")
+                if not self._close_local_trade(session, existing_for_instrument, reason="signal_reversed_or_flat"):
+                    # Still open at OANDA - opening the opposite side now would net against it.
+                    log.error("not_opening_new_trade_old_one_still_open", instrument=instrument)
+                    return None
             else:
                 # already positioned the direction the strategy wants - no pyramiding in v1.
                 return None
@@ -71,7 +75,7 @@ class OrderManager:
             return None
 
         try:
-            result = self._client.place_market_order(instrument, sizing.units)
+            result = self._client.place_market_order(instrument, sizing.units, stop_distance=sizing.stop_distance)
         except OandaClientError as exc:
             log.error("order_placement_failed", instrument=instrument, units=sizing.units, error=str(exc))
             return None
@@ -111,19 +115,26 @@ class OrderManager:
         for trade in repo.open_trades(session):
             self._close_local_trade(session, trade, reason="kill_switch_flatten")
 
-    def _close_local_trade(self, session: Session, trade, *, reason: str) -> None:
+    def _close_local_trade(self, session: Session, trade, *, reason: str) -> bool:
+        """True if the trade is now closed (by us, or already by OANDA's own stop); False if it is
+        still open at OANDA and the caller must not act as though it were flat."""
         try:
             result = self._client.close_trade(trade.oanda_trade_id)
         except OandaClientError as exc:
             log.error("trade_close_failed", trade_id=trade.oanda_trade_id, error=str(exc), reason=reason)
-            return
+            # With server-side stops this is often just "OANDA already stopped it out and our
+            # local row hasn't caught up yet" - resolve that now instead of waiting for the next
+            # periodic reconciliation pass.
+            _reconcile_locally_open_but_remotely_closed(session, self._client, trade)
+            session.refresh(trade)
+            return trade.status != TradeStatus.OPEN
 
         if result.fill_price is None:
             # No fill transaction came back, so OANDA did NOT close it. Recording a close here left
             # a 1.9M-unit position open at OANDA while the dashboard showed none; leave the row
             # open and let the next signal / reconciliation pass retry.
             log.error("trade_close_not_filled", trade_id=trade.oanda_trade_id, reason=reason, raw=result.raw)
-            return
+            return False
 
         now = dt.datetime.now(dt.timezone.utc)
         exit_price = result.fill_price
@@ -157,3 +168,4 @@ class OrderManager:
                 },
             )
         )
+        return True

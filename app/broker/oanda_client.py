@@ -9,7 +9,7 @@ import structlog
 from oandapyV20 import API
 from oandapyV20.endpoints.accounts import AccountInstruments, AccountSummary as AccountSummaryEndpoint
 from oandapyV20.endpoints.orders import OrderCreate
-from oandapyV20.endpoints.trades import OpenTrades, TradeClose, TradeDetails
+from oandapyV20.endpoints.trades import OpenTrades, TradeCRCDO, TradeClose, TradeDetails
 from oandapyV20.exceptions import V20Error
 
 from app.broker.models import AccountSummary, OpenTrade, OrderResult
@@ -20,6 +20,22 @@ log = structlog.get_logger(__name__)
 
 class OandaClientError(RuntimeError):
     pass
+
+
+def price_precision(instrument: str) -> int:
+    """OANDA rejects prices/distances with more decimals than the instrument's display precision:
+    3 for JPY-quoted pairs, 5 for the other majors this bot trades."""
+    return 3 if instrument.endswith("_JPY") else 5
+
+
+def format_price(instrument: str, value: float) -> str:
+    return f"{value:.{price_precision(instrument)}f}"
+
+
+def format_stop_distance(instrument: str, distance: float) -> str:
+    """Never rounds a real distance down to zero (which OANDA rejects) - floors at one tick."""
+    precision = price_precision(instrument)
+    return f"{max(round(distance, precision), 10 ** -precision):.{precision}f}"
 
 
 class OandaClient:
@@ -89,9 +105,13 @@ class OandaClient:
             for t in resp.get("trades", [])
         ]
 
-    def place_market_order(self, instrument: str, units: float) -> OrderResult:
+    def place_market_order(self, instrument: str, units: float, stop_distance: float | None = None) -> OrderResult:
         """units: positive to go/add long, negative to go/add short. Sizing is decided upstream
-        by the risk manager - this method just executes what it's told."""
+        by the risk manager - this method just executes what it's told.
+
+        stop_distance: when given, attaches a server-side stop-loss that distance (in price
+        units) from the fill price, so OANDA itself closes the trade if price runs against it -
+        even while this process, or the machine it runs on, is down."""
         order_payload = {
             "order": {
                 "type": "MARKET",
@@ -101,6 +121,11 @@ class OandaClient:
                 "positionFill": "DEFAULT",
             }
         }
+        if stop_distance:
+            order_payload["order"]["stopLossOnFill"] = {
+                "distance": format_stop_distance(instrument, stop_distance),
+                "timeInForce": "GTC",
+            }
         req = OrderCreate(accountID=self._account_id, data=order_payload)
         try:
             resp = self._api.request(req)
@@ -129,6 +154,18 @@ class OandaClient:
             status="filled",
             raw=resp,
         )
+
+    def set_trade_stop_loss(self, trade_id: str, instrument: str, stop_price: float) -> None:
+        """Attaches (or replaces) a stop-loss on an already-open trade."""
+        req = TradeCRCDO(
+            accountID=self._account_id,
+            tradeID=trade_id,
+            data={"stopLoss": {"price": format_price(instrument, stop_price), "timeInForce": "GTC"}},
+        )
+        try:
+            self._api.request(req)
+        except V20Error as exc:
+            raise OandaClientError(f"failed to set stop-loss on trade {trade_id}: {exc}") from exc
 
     def get_trade(self, trade_id: str) -> dict:
         """Raw trade detail dict (not wrapped in a pydantic model) - used by

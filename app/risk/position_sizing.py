@@ -18,10 +18,16 @@ from dataclasses import dataclass
 from app.risk.limits import RiskLimits
 
 
+# The one definition of "how far away is the stop" - used by sizing, by the stop sent with each
+# order, and by scripts/protect_open_trades.py, so they can never drift apart.
+ATR_STOP_MULTIPLIER = 2.0
+
+
 @dataclass(frozen=True)
 class SizingResult:
     units: float
     capped_by_leverage: bool
+    stop_distance: float = 0.0  # price-unit distance the position was sized against; the order manager sends it to OANDA as a real stop
 
 
 def size_position(
@@ -31,7 +37,7 @@ def size_position(
     atr: float,
     direction: int,  # +1 long, -1 short, 0 -> always returns 0 units
     limits: RiskLimits,
-    atr_stop_multiplier: float = 2.0,
+    atr_stop_multiplier: float = ATR_STOP_MULTIPLIER,
     account_to_quote_rate: float = 1.0,
 ) -> SizingResult:
     """account_to_quote_rate: the price of one unit of the account's currency, expressed in the
@@ -41,7 +47,7 @@ def size_position(
     or risk sizing is silently wrong by whatever that rate actually is.
     """
     if direction == 0 or equity <= 0 or price <= 0:
-        return SizingResult(units=0.0, capped_by_leverage=False)
+        return SizingResult(units=0.0, capped_by_leverage=False, stop_distance=0.0)
 
     equity_in_quote_currency = equity * account_to_quote_rate
 
@@ -53,7 +59,7 @@ def size_position(
     capped = raw_units > max_units_from_leverage
     units = min(raw_units, max_units_from_leverage)
 
-    return SizingResult(units=direction * units, capped_by_leverage=capped)
+    return SizingResult(units=direction * units, capped_by_leverage=capped, stop_distance=stop_distance)
 
 
 def resolve_account_to_quote_rate(

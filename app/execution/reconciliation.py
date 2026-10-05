@@ -68,11 +68,16 @@ def _reconcile_locally_open_but_remotely_closed(session: Session, client: OandaC
         return  # not actually closed remotely; leave it, will retry next reconciliation tick
 
     realized_pnl = float(detail.get("realizedPL", 0.0))
-    # OANDA's TradeDetails doesn't reliably expose a single "close price" field across all
-    # closure reasons (manual close vs. stop-out) - back it out from realized P&L instead,
-    # which is always present and authoritative for accounting purposes.
-    direction_sign = 1 if trade.direction == TradeDirection.LONG else -1
-    exit_price = trade.entry_price + (realized_pnl / trade.units) * direction_sign if trade.units else trade.entry_price
+    # Prefer OANDA's own average close price. realizedPL is in the ACCOUNT currency (GBP), so
+    # backing a price out of it (pnl / units) is only right when the quote currency happens to
+    # equal the account currency - wrong for every pair on a GBP account. Server-side stop-outs
+    # always land on this path, so it has to be right. The back-out stays as a fallback only.
+    average_close = detail.get("averageClosePrice")
+    if average_close is not None:
+        exit_price = float(average_close)
+    else:
+        direction_sign = 1 if trade.direction == TradeDirection.LONG else -1
+        exit_price = trade.entry_price + (realized_pnl / trade.units) * direction_sign if trade.units else trade.entry_price
 
     updated = repo.record_trade_closed(
         session,

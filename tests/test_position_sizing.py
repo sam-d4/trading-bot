@@ -93,3 +93,12 @@ class TestResolveAccountToQuoteRate:
         # raised and the engine fell back to 1.0, undersizing every USD_JPY trade ~200x.
         rate = resolve_account_to_quote_rate("GBP", "JPY", {"GBP_USD": 1.35, "USD_JPY": 158.0})
         assert rate == pytest.approx(1.35 * 158.0)
+
+
+def test_sizing_result_carries_the_stop_distance_it_sized_against():
+    limits = RiskLimits(
+        max_daily_drawdown_pct=3.0, max_overall_drawdown_pct=10.0, risk_per_trade_pct=1.0, max_leverage=10.0, flatten_on_kill_switch=True
+    )
+    result = size_position(equity=10_000, price=1.10, atr=0.0015, direction=1, limits=limits)
+    assert result.stop_distance == pytest.approx(0.0030)
+    assert size_position(equity=10_000, price=1.10, atr=0.0015, direction=0, limits=limits).stop_distance == 0.0

@@ -2,7 +2,8 @@
 
 Proves the OANDA plumbing works end to end against the configured account (practice by default):
   1. fetch and print the account summary
-  2. place a tiny market order (1 unit of the primary instrument)
+  2. place a tiny market order (1 unit of the primary instrument) WITH a server-side stop-loss,
+     and read the trade back to confirm OANDA actually attached the stop
   3. immediately close it
 
 Market orders fill-or-kill immediately, so there's nothing to "cancel" pre-fill - the equivalent
@@ -69,7 +70,7 @@ def main() -> int:
     instrument = settings.primary_instrument
     print(f"\nPlacing a 1-unit test market order on {instrument}...")
     try:
-        order = client.place_market_order(instrument, units=1)
+        order = client.place_market_order(instrument, units=1, stop_distance=0.0050)
     except OandaClientError as exc:
         print(f"FAILED to place test order: {exc}")
         return 1
@@ -79,6 +80,12 @@ def main() -> int:
         return 1
 
     print(f"  filled: trade_id={order.trade_id} price={order.fill_price}")
+
+    stop = client.get_trade(order.trade_id).get("stopLossOrder")
+    if stop:
+        print(f"  stop-loss attached by OANDA: price={stop.get('price')} (fill {order.fill_price})")
+    else:
+        print("  WARNING: no stop-loss on the trade after fill - stopLossOnFill was NOT honoured.")
 
     print(f"Closing trade {order.trade_id}...")
     try:

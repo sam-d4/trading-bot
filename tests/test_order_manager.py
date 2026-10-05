@@ -1,5 +1,7 @@
 import datetime as dt
 
+import pytest
+
 from app.execution.order_manager import OrderManager
 from app.persistence import repo
 from app.persistence.models import TradeStatus
@@ -160,3 +162,61 @@ def test_reconcile_reopens_a_trade_recorded_closed_but_still_open_at_oanda(db_se
     reconcile(db_session, client)
 
     assert [t.oanda_trade_id for t in repo.open_trades(db_session)] == [trade.oanda_trade_id]
+
+
+def test_open_trade_is_sent_with_the_stop_distance_sizing_used(db_session):
+    om, client, _ = _order_manager()
+    om.execute_signal(
+        db_session, instrument="EUR_USD", direction=-1, price=1.10, atr=0.0015, equity=10_000, strategy_name="test"
+    )
+    assert client.placed_stops == [pytest.approx(0.0030)]  # 2 x ATR, always a positive distance
+
+
+def test_signal_flip_does_not_open_new_trade_while_old_one_is_still_open_at_oanda(db_session):
+    """If the close fails and the trade is genuinely still open, opening the opposite side would net
+    against it - the new order must not be placed."""
+    om, client, _ = _order_manager()
+    om.execute_signal(
+        db_session, instrument="EUR_USD", direction=1, price=1.10, atr=0.0015, equity=10_000, strategy_name="test"
+    )
+    original_close = client.close_trade
+
+    def close_without_fill(trade_id):
+        result = original_close(trade_id)
+        result.fill_price = None
+        return result
+
+    client.close_trade = close_without_fill
+    result = om.execute_signal(
+        db_session, instrument="EUR_USD", direction=-1, price=1.10, atr=0.0015, equity=10_000, strategy_name="test"
+    )
+
+    assert result is None
+    assert len(client.placed_orders) == 1  # only the original long
+
+
+def test_signal_flip_after_oanda_already_stopped_the_trade_out_opens_the_new_trade(db_session):
+    """The race server-side stops create: OANDA closed the trade, our row hasn't caught up, the
+    model flips. TradeClose fails on the already-closed trade - that must reconcile the row and
+    carry on, not leave the strategy stuck."""
+    from app.broker.oanda_client import OandaClientError
+
+    om, client, _ = _order_manager()
+    om.execute_signal(
+        db_session, instrument="EUR_USD", direction=1, price=1.10, atr=0.0015, equity=10_000, strategy_name="test"
+    )
+    trade_id = next(iter(client._open_trades))
+    client.remove_open_trade_remotely(trade_id, realized_pnl=-20.0, average_close_price=1.097)
+
+    def close_fails(_trade_id):
+        raise OandaClientError("trade already closed")
+
+    client.close_trade = close_fails
+    result = om.execute_signal(
+        db_session, instrument="EUR_USD", direction=-1, price=1.10, atr=0.0015, equity=10_000, strategy_name="test"
+    )
+
+    assert result is not None and result.status == "filled"
+    assert len(client.placed_orders) == 2
+    stopped = [t for t in repo.recent_trades(db_session) if t.oanda_trade_id == trade_id][0]
+    assert stopped.status == TradeStatus.CLOSED and stopped.exit_price == 1.097

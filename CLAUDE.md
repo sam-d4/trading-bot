@@ -48,6 +48,17 @@ Run the app locally:
 ```bash
 .venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
+In practice the live process is run by a launchd LaunchAgent, `~/Library/LaunchAgents/com.sam.trading-bot.plist`
+(outside this repo — recreate it if the machine is ever rebuilt): it wraps uvicorn in `caffeinate -i -s`
+(macOS built-in; blocks idle/system sleep only while the bot runs), starts at login, respawns on
+crash (`KeepAlive`), and force-kills after 20s (`ExitTimeOut`) because graceful shutdown routinely
+hangs. Logs go to `logs/server.log` (gitignored; the old `/tmp` log was wiped on every reboot).
+
+```bash
+launchctl kickstart -k gui/$(id -u)/com.sam.trading-bot   # restart (do NOT also nohup a second copy - port 8000)
+launchctl bootout   gui/$(id -u)/com.sam.trading-bot      # stop it and keep it stopped
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.sam.trading-bot.plist   # load it again
+```
 Boots with the baseline rule-based strategy on every pair in `TRADED_INSTRUMENTS_CSV` if
 `OANDA_API_TOKEN`/`OANDA_ACCOUNT_ID` are unset in `.env` — that's a deliberate no-crash fallback,
 not a bug, since the [rl] extra and OANDA creds are both optional at boot. Check `/healthz` and
@@ -76,6 +87,7 @@ Data pipeline / RL scripts (all read `.env` via `app/config/settings.py`; all ne
 ```bash
 .venv/bin/python scripts/check_oanda_connection.py                    # account summary + a live test order round-trip
 .venv/bin/python scripts/fetch_historical_data.py --instruments EUR_USD GBP_USD USD_JPY AUD_USD --years 5
+.venv/bin/python scripts/protect_open_trades.py --dry-run             # attach 2xATR stops to any open OANDA trade lacking one
 .venv/bin/python scripts/run_backtest.py --instrument EUR_USD
 .venv/bin/python scripts/run_training.py --instrument EUR_USD --timesteps 100000 --contestants 4
 ```
@@ -102,9 +114,13 @@ instrument on a staggered rotation — same tournament pipeline, run by hand.
   package, so `features.py`/`candles.py`/`enrichment.py`/`store.py` silently went uncommitted and
   the pushed repo couldn't run. If a new source directory ever fails to show up in `git status`,
   run `git check-ignore -v <path>` before assuming it's tracked.
-- The Mac sleeps/wakes repeatedly while the bot runs, dropping every network connection. The
-  engine tolerates this (supervised loops, stream reconnect, request timeouts), and `RemoteDisconnected`
-  errors in the log right after a wake are expected, not a bug. Bars/decisions are missed while asleep.
+- The Mac used to sleep/wake repeatedly while the bot ran, dropping every network connection; the
+  launchd job's `caffeinate` now prevents idle sleep, but lid-close/manual sleep still sleeps it.
+  The engine tolerates drops (supervised loops, stream reconnect, request timeouts), and
+  `RemoteDisconnected` errors in the log right after a wake are expected, not a bug. Bars/decisions
+  are missed while asleep. A full shutdown/reboot stops the bot until the user logs in again, when
+  launchd restarts it — this once left a 1.9M-unit position unmanaged for ~34 hours (market
+  closed for part of that), which is why every trade now carries a server-side stop (below).
 - `pandas-ta` was tried and dropped (stale release, hung under this project's pandas version).
   `app/data/features.py`'s indicators (EMA/RSI/ATR/z-score) are hand-rolled on purpose — don't
   reach for `pandas-ta` to "simplify" them.
@@ -170,6 +186,17 @@ against OANDA's own account state, which is always the source of truth — the l
   unrealized P&L), checked both pre-trade and on an independent poll. Never auto-resets — only an
   explicit dashboard action clears a halt, including the manual "Emergency Stop" button
   (`POST /api/kill-switch/trip`), which reuses the exact same halt mechanism, not a second one.
+- **Every order carries a real stop-loss.** Sizing assumes a stop `ATR_STOP_MULTIPLIER` (2) x ATR
+  away; that exact distance (`SizingResult.stop_distance`) is sent to OANDA as `stopLossOnFill`
+  by `OandaClient.place_market_order`, formatted to the instrument's price precision (3 dp JPY, 5 dp
+  otherwise — wrong precision makes OANDA reject the order). Before this, no stop existed anywhere:
+  the "risk per trade" figure was fiction and one AUD_USD trade round-tripped from ~+£5k unrealised
+  to a -£5.2k loss, tripping the 10% kill-switch. A stop-out closes the trade at OANDA, so
+  `reconciliation.py` records it (using OANDA's `averageClosePrice`, NOT a price backed out of
+  `realizedPL`, which is in the account currency). `OrderManager` refuses to open a new trade
+  while the old one is still open at OANDA, and reconciles a "close failed" immediately (it is
+  usually "already stopped out"). Backtests and the validation gate do NOT model these stops, so
+  live behaviour differs somewhat from what the gate validated.
 - `position_sizing.py`: fixed-fractional risk off ATR-based stop distance, capped by
   `max_leverage`. Has an `account_to_quote_rate` parameter because the account's currency and an
   instrument's quote currency aren't always the same (this was a real, previously-shipped bug on
