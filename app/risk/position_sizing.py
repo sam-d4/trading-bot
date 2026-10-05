@@ -21,6 +21,10 @@ from app.risk.limits import RiskLimits
 # The one definition of "how far away is the stop" - used by sizing, by the stop sent with each
 # order, and by scripts/protect_open_trades.py, so they can never drift apart.
 ATR_STOP_MULTIPLIER = 2.0
+# Floor on the stop distance as a fraction of price (5 bps ~ 5-6 pips on EUR_USD). Normal H1 stops
+# are 3x+ this, so it never changes real sizing - it exists so a garbage ATR (e.g. computed from
+# 1-minute bars) can't produce a few-pip stop that is hit instantly and re-entered in a loop.
+MIN_STOP_PCT = 0.0005
 
 
 @dataclass(frozen=True)
@@ -51,7 +55,7 @@ def size_position(
 
     equity_in_quote_currency = equity * account_to_quote_rate
 
-    stop_distance = max(atr * atr_stop_multiplier, price * 0.0001)  # floor avoids div-by-~0 on dead ticks
+    stop_distance = max(atr * atr_stop_multiplier, price * MIN_STOP_PCT)
     risk_amount = equity_in_quote_currency * (limits.risk_per_trade_pct / 100)
     raw_units = risk_amount / stop_distance
 

@@ -68,6 +68,26 @@ BAR_HISTORY_LEN = 400
 CARRY_REFRESH_SECONDS = 6 * 3600  # financing rates change occasionally, not every bar
 
 
+# The bar length the RL models were TRAINED on (granularity "H1" everywhere in app/rl and
+# scripts/run_training.py). Live bars must be the same length or every feature (20-bar momentum, ATR,
+# z-scores) means something different from what the model learned.
+MODEL_BAR_SECONDS = 3600
+
+
+def bar_bucket_start(tick_time: dt.datetime, bar_seconds: int) -> dt.datetime:
+    """Start of the bar_seconds-long, epoch-aligned bucket containing tick_time (so 3600 gives
+    on-the-hour H1 bars, like OANDA's own candles).
+
+    This used to be tick_time.replace(second=(second // bar_seconds) * bar_seconds), which only
+    ever changes the SECONDS field: for any bar_seconds >= 60 it floored to the minute, so the
+    live engine silently built 1-minute bars while the models were trained on 1-hour bars -
+    median live trade lasted 17 minutes against backtests of one trade per 1-3 days."""
+    if tick_time.tzinfo is None:
+        tick_time = tick_time.replace(tzinfo=dt.timezone.utc)
+    epoch = tick_time.timestamp()
+    return dt.datetime.fromtimestamp(epoch - (epoch % bar_seconds), tz=dt.timezone.utc)
+
+
 class TradingEngine:
     def __init__(
         self,
@@ -101,9 +121,18 @@ class TradingEngine:
         self._current_bar: dict[str, dict | None] = dict.fromkeys(self._all_instruments)
         self._bucket_start: dict[str, dt.datetime | None] = dict.fromkeys(self._all_instruments)
         self._stream_last_tick_at: dt.datetime | None = None
+        # Instruments seeded from history while mid-bar: their first live bar only covers the part
+        # of the hour after startup, so it is discarded rather than fed to a model as a real bar.
+        self._partial_first_bucket: set[str] = set()
         self._carry_differential: dict[str, float] = dict.fromkeys(self._traded_instruments, 0.0)
 
     async def run(self) -> None:
+        if self._settings.live_bar_seconds != MODEL_BAR_SECONDS:
+            log.error(
+                "live_bar_seconds_does_not_match_model_training_granularity",
+                live_bar_seconds=self._settings.live_bar_seconds,
+                models_trained_on=MODEL_BAR_SECONDS,
+            )
         await self._seed_bar_history()
 
         stream = OandaPriceStream(self._settings, self._all_instruments)
@@ -155,6 +184,7 @@ class TradingEngine:
                 continue
             recent = candles.tail(BAR_HISTORY_LEN)
             self._bars[inst].extend(recent.to_dict("records"))
+            self._partial_first_bucket.add(inst)
             log.info("bar_history_seeded", instrument=inst, bars=len(self._bars[inst]))
 
     async def _supervised(self, name: str, factory) -> None:
@@ -201,10 +231,7 @@ class TradingEngine:
         # OANDA ticks carry nanosecond precision; datetime only supports microseconds, so floor
         # before converting rather than letting pandas warn on every single tick.
         tick_time = pd.Timestamp(tick.time).floor("us").to_pydatetime()
-        bucket = tick_time.replace(
-            second=(tick_time.second // self._settings.live_bar_seconds) * self._settings.live_bar_seconds,
-            microsecond=0,
-        )
+        bucket = bar_bucket_start(tick_time, self._settings.live_bar_seconds)
 
         inst = tick.instrument
         if self._bucket_start[inst] is None:
@@ -231,6 +258,9 @@ class TradingEngine:
         current = self._current_bar[instrument]
         bucket_start = self._bucket_start[instrument]
         if current is None or bucket_start is None:
+            return
+        if instrument in self._partial_first_bucket:
+            self._partial_first_bucket.discard(instrument)
             return
         self._bars[instrument].append({"time": bucket_start, **current})
 

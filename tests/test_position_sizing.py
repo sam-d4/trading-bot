@@ -102,3 +102,13 @@ def test_sizing_result_carries_the_stop_distance_it_sized_against():
     result = size_position(equity=10_000, price=1.10, atr=0.0015, direction=1, limits=limits)
     assert result.stop_distance == pytest.approx(0.0030)
     assert size_position(equity=10_000, price=1.10, atr=0.0015, direction=0, limits=limits).stop_distance == 0.0
+
+
+def test_a_garbage_tiny_atr_cannot_produce_a_micro_stop():
+    """Regression: with ATR from 1-minute bars the stop was ~3 pips, hit instantly and re-entered in
+    a loop (6 consecutive AUD_USD stop-outs, ~-£3.5k). The stop is floored at 5 bps of price."""
+    limits = RiskLimits(
+        max_daily_drawdown_pct=3.0, max_overall_drawdown_pct=10.0, risk_per_trade_pct=1.0, max_leverage=20.0, flatten_on_kill_switch=True
+    )
+    result = size_position(equity=10_000, price=1.10, atr=0.00004, direction=1, limits=limits)
+    assert result.stop_distance == pytest.approx(1.10 * 0.0005)

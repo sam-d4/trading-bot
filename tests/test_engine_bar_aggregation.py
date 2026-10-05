@@ -151,3 +151,39 @@ async def test_supervised_restarts_a_loop_that_raises(monkeypatch):
     await engine._supervised("flaky", flaky)
 
     assert calls["n"] == 3
+
+
+def test_hourly_bars_align_to_the_hour_not_the_minute():
+    """Regression: bucketing only floored the SECONDS field, so live_bar_seconds=3600 (or 300) still
+    produced 1-MINUTE bars while the models were trained on 1-HOUR bars."""
+    engine = _engine(bar_seconds=3600)
+    engine._on_tick(_tick("2026-01-01T11:07:23Z", 1.1000))
+    engine._on_tick(_tick("2026-01-01T11:08:41Z", 1.1010))  # old code: a new bar here
+    engine._on_tick(_tick("2026-01-01T11:59:59Z", 1.0990))
+    assert len(engine._bars["EUR_USD"]) == 0
+    assert engine._current_bar["EUR_USD"]["high"] == 1.1010 and engine._current_bar["EUR_USD"]["volume"] == 3
+
+    engine._on_tick(_tick("2026-01-01T12:00:03Z", 1.1020))  # the hour rolls over
+    assert len(engine._bars["EUR_USD"]) == 1
+    finalized = engine._bars["EUR_USD"][0]
+    assert finalized["time"] == dt.datetime(2026, 1, 1, 11, 0, tzinfo=dt.timezone.utc)
+    assert (finalized["open"], finalized["high"], finalized["low"], finalized["close"]) == (1.1000, 1.1010, 1.0990, 1.0990)
+
+
+def test_five_minute_bars_span_five_minutes():
+    engine = _engine(bar_seconds=300)
+    engine._on_tick(_tick("2026-01-01T11:07:23Z", 1.1000))
+    engine._on_tick(_tick("2026-01-01T11:09:59Z", 1.1005))
+    assert len(engine._bars["EUR_USD"]) == 0  # both inside 11:05-11:10
+    engine._on_tick(_tick("2026-01-01T11:10:00Z", 1.1010))
+    assert len(engine._bars["EUR_USD"]) == 1
+
+
+def test_partial_bar_from_starting_mid_hour_is_not_fed_to_the_model():
+    engine = _engine(bar_seconds=3600)
+    engine._partial_first_bucket.add("EUR_USD")  # what _seed_bar_history does after seeding
+    engine._on_tick(_tick("2026-01-01T11:40:00Z", 1.1000))
+    engine._on_tick(_tick("2026-01-01T12:00:01Z", 1.1010))  # first rollover: bar only covers 11:40-12:00
+    assert len(engine._bars["EUR_USD"]) == 0
+    engine._on_tick(_tick("2026-01-01T13:00:01Z", 1.1020))  # next one is a full hour
+    assert len(engine._bars["EUR_USD"]) == 1

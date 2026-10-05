@@ -22,7 +22,9 @@ class Settings(BaseSettings):
     traded_instruments_csv: str = "EUR_USD,GBP_USD,USD_JPY,AUD_USD"
 
     # Live engine timing (seconds)
-    live_bar_seconds: int = 300
+    # Must equal the bar length the models were trained on (H1 = 3600) - see app/core/engine.py's
+    # MODEL_BAR_SECONDS. Tests override this with small values.
+    live_bar_seconds: int = 3600
     kill_switch_poll_seconds: int = 30
     reconciliation_interval_seconds: int = 60
     live_model_poll_seconds: int = 120
