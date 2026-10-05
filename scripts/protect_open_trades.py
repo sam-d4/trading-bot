@@ -43,6 +43,7 @@ def atr_for(settings, instrument: str) -> float:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dry-run", action="store_true", help="print what would be set, change nothing")
+    parser.add_argument("--force", action="store_true", help="also REPLACE stops that already exist (e.g. a too-tight one)")
     parser.add_argument("--i-understand-this-is-live", action="store_true")
     args = parser.parse_args()
 
@@ -60,7 +61,7 @@ def main() -> int:
     for trade in open_trades:
         detail = client.get_trade(trade.trade_id)
         existing = detail.get("stopLossOrder")
-        if existing:
+        if existing and not args.force:
             print(f"trade {trade.trade_id} {trade.instrument}: already has a stop at {existing.get('price')} - leaving it")
             continue
 

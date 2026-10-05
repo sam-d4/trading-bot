@@ -6,6 +6,7 @@ this is deliberately separate from the live OANDA client since it's a bulk, offl
 """
 
 import datetime as dt
+import time
 
 import pandas as pd
 import structlog
@@ -18,6 +19,7 @@ from app.config.settings import Settings
 log = structlog.get_logger(__name__)
 
 MAX_CANDLES_PER_REQUEST = 5000
+MAX_ATTEMPTS = 4
 
 
 class CandleFetchError(RuntimeError):
@@ -67,10 +69,19 @@ def fetch_candles(
             "count": MAX_CANDLES_PER_REQUEST,
         }
         req = InstrumentsCandles(instrument=instrument, params=params)
-        try:
-            resp = api.request(req)
-        except V20Error as exc:
-            raise CandleFetchError(f"failed fetching candles for {instrument}: {exc}") from exc
+        resp = None
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            try:
+                resp = api.request(req)
+                break
+            except (V20Error, OSError) as exc:
+                # OANDA's practice REST intermittently answers 500 with a full HTML error page (and the
+                # network drops on wake) - retry, and never put that page into an exception message.
+                if attempt == MAX_ATTEMPTS:
+                    raise CandleFetchError(
+                        f"failed fetching candles for {instrument} after {attempt} attempts: {str(exc)[:200]}"
+                    ) from exc
+                time.sleep(2 * attempt)
 
         batch = _parse_candles(resp.get("candles", []))
         if batch.empty:

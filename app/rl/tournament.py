@@ -61,6 +61,7 @@ def run_tournament(
     base_model_path: str | None = None,
     reward_mode: str | None = None,
     dsr_eta: float | None = None,
+    flat_penalty_bps: float | None = None,
 ) -> tuple[Contestant, list[Contestant]]:
     """Returns (winner, all_contestants_ranked_best_first). winner.eliminated is always False and
     winner.rank == 1; every other entry has eliminated=True and rank 2..n_contestants.
@@ -100,9 +101,16 @@ def run_tournament(
                 seed=seed,
                 reward_mode=reward_mode,
                 dsr_eta=dsr_eta,
+                flat_penalty_bps=flat_penalty_bps,
             )
         model = fine_tune(
-            model, train_features, total_timesteps=timesteps, lookback=lookback, reward_mode=reward_mode, dsr_eta=dsr_eta
+            model,
+            train_features,
+            total_timesteps=timesteps,
+            lookback=lookback,
+            reward_mode=reward_mode,
+            dsr_eta=dsr_eta,
+            flat_penalty_bps=flat_penalty_bps,
         )
 
         strategy = RLPolicyStrategy(

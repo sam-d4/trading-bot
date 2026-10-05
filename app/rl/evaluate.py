@@ -31,8 +31,9 @@ from app.strategy.library import MACrossoverStrategy, ParabolicSARStrategy, add_
 @dataclass
 class ValidationThresholds:
     min_sharpe: float = 0.0
+    min_net_return_pct: float = 0.0  # net of costs over the validation window - Sharpe alone passed losers
     max_allowed_drawdown_pct: float = 15.0
-    min_trade_count: int = 10
+    min_trade_count: int = 12
     must_beat_buy_and_hold: bool = True
     must_beat_best_baseline: bool = True
     must_beat_live_model: bool = True
@@ -64,6 +65,8 @@ def validate_candidate(
         reasons.append(
             f"too few trades ({metrics['trade_count']} < {thresholds.min_trade_count}) to be meaningful"
         )
+    if metrics["total_return_pct"] <= thresholds.min_net_return_pct:
+        reasons.append(f"net return {metrics['total_return_pct']:.2f}% not above {thresholds.min_net_return_pct}%")
     if metrics["sharpe"] < thresholds.min_sharpe:
         reasons.append(f"sharpe {metrics['sharpe']:.3f} below minimum {thresholds.min_sharpe}")
     if metrics["max_drawdown_pct"] < -thresholds.max_allowed_drawdown_pct:

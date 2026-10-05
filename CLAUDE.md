@@ -90,6 +90,8 @@ Data pipeline / RL scripts (all read `.env` via `app/config/settings.py`; all ne
 .venv/bin/python scripts/protect_open_trades.py --dry-run             # attach 2xATR stops to any open OANDA trade lacking one
 .venv/bin/python scripts/run_backtest.py --instrument EUR_USD
 .venv/bin/python scripts/run_training.py --instrument EUR_USD --timesteps 100000 --contestants 4
+.venv/bin/python scripts/evaluate_models_oos.py --since 2026-09-11T14:00:00   # replay every registered model on data it never saw; selected vs rejected
+.venv/bin/python scripts/walk_forward.py --instrument AUD_USD --folds 6 --candidates 6   # does the RECIPE have an edge across regimes? (hours; --threads limits CPU)
 ```
 `run_training.py` is what the background scheduler (`app/rl/scheduler.py`) runs automatically per
 instrument on a staggered rotation — same tournament pipeline, run by hand.
@@ -166,6 +168,17 @@ dashboard showing live models assigned the whole time — until this fix. If you
 pair go a suspiciously long time with zero trades, check `bar_history_seeded` fired for it at the
 most recent startup before assuming the strategy itself is just low-frequency.
 
+**Live bars must be the same length the models were trained on (H1).** `bar_bucket_start()` floors
+tick times to epoch-aligned `live_bar_seconds` buckets (default 3600, `MODEL_BAR_SECONDS`; the engine
+logs a loud error at startup if they differ). It used to do `tick_time.replace(second=...)`, which only
+changes the seconds field, so for any value >= 60 the engine silently built **1-minute** bars while
+every model was trained on **1-hour** bars. Features (20-bar momentum, ATR, z-scores) meant something
+else entirely, the models traded noise (median hold 17 minutes vs one trade per 1-3 days in backtest,
+28 of 40 trades losing, NAV -8.6%), and the ATR-derived stop was a few pips wide (six AUD_USD
+stop-outs/re-entries in a row). A bar started mid-hour (after a restart) is partial and is discarded,
+not fed to a model, so the first decision after a restart comes 1-2 hours later. Log timestamps are
+local time (BST); `date -u` is UTC.
+
 Resilience: every long-running loop in `run()` is wrapped in `_supervised()` (restarts on any
 uncaught exception), `OandaPriceStream._run` reconnects with capped backoff and uses a 30s read
 timeout (OANDA heartbeats every ~5s, so a silently-dead connection raises instead of hanging),
@@ -230,6 +243,24 @@ visibility in the dashboard's model history — the tournament is a selection st
 gate. A passing candidate becomes `status=validated` and sits on the dashboard's "pending
 promotion" card; only an explicit `POST /api/models/{id}/promote` (or
 `require_manual_confirmation_to_promote=false`, which is not the default) flips it to `live`.
+
+**The validation gate has been shown to be unreliable — do not trust a "passing" candidate on the gate
+alone.** `scripts/evaluate_models_oos.py` replayed all ~350 historical models on 24 days of fresh data
+(Sep 11 - Oct 5 2026) with correct H1 inputs: models the pipeline had *selected* averaged -1.4% (33%
+profitable) vs -0.14% for *rejected* ones, the rank correlation between validation-window score and
+real out-of-sample return was about **-0.5**, and the average model earned roughly its trading costs
+(no gross edge). The old flaws: one 500-bar window both ranked the tournament AND "validated" the winner;
+the candle cache was never refreshed (the retrain path trained and judged on data weeks old);
+consecutive cycles re-promoted near-identical models. The scheduler now (a) refreshes the cache every
+cycle (`data/store.py:refresh_cached_candles`), (b) ranks on a 750-bar *selection* window and validates
+the winner on a separate, later 750-bar *validation* window, (c) requires positive net return and >= 12
+trades, and (d) runs every 4h per pair, not 1h. These changes are principled but UNPROVEN until the
+walk-forward harness says otherwise: `scripts/walk_forward.py` trains from scratch at several points
+across the history, tests each on the period right after, and reports whether the tournament winner
+beats a random candidate, whether a majority vote (`app/rl/walk_forward.py:VoteStrategy`) beats one
+model, and the within-fold rank correlation of select-window vs test return. Results land in
+`logs/walk_forward_<INSTRUMENT>.csv`. `scripts/run_training.py` (manual) still uses the old
+single-window split.
 
 `scheduler.py` runs this per-instrument on a staggered rotation (one job per traded instrument,
 each firing every `interval_hours * len(traded_instruments)`, offset so only one tournament's

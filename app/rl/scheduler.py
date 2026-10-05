@@ -20,10 +20,10 @@ interval_hours * len(traded_instruments), with staggered start times spaced inte
 the four jobs are offset so only one retrain (one tournament's worth of PPO training) is ever
 running at a time, rather than quadrupling the background CPU load every cycle. Retraining every
 pair "more often" would mean either accepting that higher constant load or shortening
-interval_hours - a deliberate tradeoff, not an oversight. (4.0 -> 2.0 on 2026-09-19, then
-2.0 -> 1.0 on 2026-09-29, both to speed up the self-improvement cadence - the second change paired
-with env.py's flat-penalty increase to 0.6 so higher-frequency candidates reach the validation
-gate sooner rather than waiting up to 8h for their first shot at beating the live model.)
+interval_hours - a deliberate tradeoff, not an oversight. (4.0 -> 2.0 -> 1.0 in late Sep to speed
+things up; back to 4.0 on 2026-10-05: replaying 277 models on fresh data showed more candidates per
+day just meant more noise promotions, and the constant tournament training starved the live process
+of CPU.)
 """
 
 import datetime as dt
@@ -34,7 +34,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from app.config.settings import Settings
 from app.data.enrichment import load_feature_context
 from app.data.features import compute_features, infer_feature_columns
-from app.data.store import load_candles
+from app.data.features import INSTRUMENT_UNIVERSE
+from app.data.store import load_candles, refresh_cached_candles
 from app.notifications.alerts import AlertSender
 from app.persistence import repo
 from app.persistence.db import SessionLocal
@@ -49,7 +50,13 @@ log = structlog.get_logger(__name__)
 
 DEFAULT_LOOKBACK = 20
 DEFAULT_TOTAL_TIMESTEPS = 20_000
-DEFAULT_HOLDOUT_BARS = 500
+# The held-out tail is split into two DISJOINT windows, both strictly after the training data:
+# the tournament ranks contestants on the older one, and only the winner is validated on the newer
+# one. Before, one 500-bar window did both jobs - the winner was picked on a window and then
+# "validated" on that same window - and on 277 models replayed over fresh data the gate's score had a
+# NEGATIVE rank correlation (-0.5) with real out-of-sample return (see scripts/evaluate_models_oos.py).
+DEFAULT_SELECT_BARS = 750
+DEFAULT_VALIDATE_BARS = 750
 DEFAULT_CONTESTANTS = 3  # smaller than the manual script's default - this runs in the background
 
 
@@ -60,10 +67,19 @@ def run_retrain_cycle(
     *,
     lookback: int = DEFAULT_LOOKBACK,
     total_timesteps: int = DEFAULT_TOTAL_TIMESTEPS,
-    holdout_bars: int = DEFAULT_HOLDOUT_BARS,
+    select_bars: int = DEFAULT_SELECT_BARS,
+    validate_bars: int = DEFAULT_VALIDATE_BARS,
     granularity: str = "H1",
     n_contestants: int = DEFAULT_CONTESTANTS,
 ) -> None:
+    # Bring the candle cache up to now first - it used to be refreshed by hand only, so every
+    # candidate was trained and judged on data weeks old (ending Sep 11 when this was found Oct 5).
+    for inst in INSTRUMENT_UNIVERSE:
+        try:
+            refresh_cached_candles(settings, inst, granularity)
+        except Exception as exc:  # noqa: BLE001 - a flaky OANDA call must not kill the cycle; stale data beats none
+            log.warning("candle_refresh_failed_using_cached_data", instrument=inst, error=str(exc)[:200])
+
     try:
         candles = load_candles(instrument, granularity)
     except FileNotFoundError:
@@ -72,13 +88,15 @@ def run_retrain_cycle(
 
     related, carry_differential = load_feature_context(settings, instrument, granularity)
     features = compute_features(candles, related_candles=related, carry_differential=carry_differential)
+    holdout_bars = select_bars + validate_bars
     min_rows = holdout_bars + lookback * 5
     if len(features) < min_rows:
         log.warning("retrain_skipped_insufficient_data", instrument=instrument, rows=len(features), required=min_rows)
         return
 
     train_features = features.iloc[:-holdout_bars].reset_index(drop=True)
-    holdout_features = features.iloc[-holdout_bars:].reset_index(drop=True)
+    select_features = features.iloc[-holdout_bars:-validate_bars].reset_index(drop=True)
+    validate_features = features.iloc[-validate_bars:].reset_index(drop=True)
     feature_columns = infer_feature_columns(train_features)
 
     with SessionLocal() as session:
@@ -93,14 +111,14 @@ def run_retrain_cycle(
         # comparison baseline must keep evaluating the live model's original (untouched) weights.
         live_strategy = RLPolicyStrategy(
             train.load_model(live_mv.artifact_path), feature_columns, lookback=lookback, model_version_name=live_mv.name
-        )
+        )  # evaluated on validate_features only, so a fresh instance with an empty buffer is right
     else:
         log.info("retrain_cold_start_tournament_from_baselines", instrument=instrument)
 
     name_prefix = f"rl_{instrument}_{dt.datetime.now(dt.timezone.utc).strftime('%Y%m%d_%H%M%S')}"
     winner, contestants = run_tournament(
         train_features,
-        holdout_features,
+        select_features,
         default_baseline_strategies(),
         n_contestants=n_contestants,
         lookback=lookback,
@@ -138,9 +156,11 @@ def run_retrain_cycle(
             else:
                 winner_mv_id = mv.id
 
+        # The winner was ranked on select_features; the gate must judge it on data it was NOT picked on.
+        winner.strategy.reset()
         outcome = validate_candidate(
             winner.strategy,
-            holdout_features,
+            validate_features,
             live_model_strategy=live_strategy,
             granularity=granularity,
             thresholds=ValidationThresholds(),
@@ -162,7 +182,7 @@ def run_retrain_cycle(
 
 
 def start_retrain_scheduler(
-    settings: Settings, alerts: AlertSender, *, interval_hours: float = 1.0
+    settings: Settings, alerts: AlertSender, *, interval_hours: float = 4.0
 ) -> AsyncIOScheduler:
     scheduler = AsyncIOScheduler()
     instruments = settings.traded_instruments
