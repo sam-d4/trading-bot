@@ -47,3 +47,16 @@ def test_rank_correlation_ignores_differences_between_folds():
     useful = pd.DataFrame({"fold": list("AAABBB"), "score": [1, 2, 3, 1, 2, 3], "outcome": [1, 2, 3, 100, 101, 102]})
     assert within_fold_rank_correlation(useful, "score", "outcome") > 0.99
     assert abs(within_fold_rank_correlation(df, "score", "outcome")) < 0.8
+
+
+def test_summarize_handles_folds_in_any_order_and_reports_winner_vs_average():
+    from app.rl.walk_forward import summarize_folds
+
+    rows = []
+    for fold, (r1, r2, vote) in {5: (1.0, 0.0, 0.5), 3: (-1.0, 0.0, 0.2), 4: (2.0, 1.0, 0.1)}.items():  # deliberately unordered
+        rows += [dict(fold=fold, kind="candidate", rank=1, select_ret=1.0, test_ret=r1, test_trades=5),
+                 dict(fold=fold, kind="candidate", rank=2, select_ret=0.0, test_ret=r2, test_trades=5),
+                 dict(fold=fold, kind="vote_all", test_ret=vote), dict(fold=fold, kind="buy_and_hold", test_ret=0.3)]
+    text = summarize_folds(pd.DataFrame(rows))
+    assert "winner beat the fold's average candidate in 2/3 folds" in text
+    assert "vote of all candidates" in text and "t-stat" in text

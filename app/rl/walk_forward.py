@@ -71,3 +71,36 @@ def within_fold_rank_correlation(df: pd.DataFrame, score_col: str, outcome_col: 
     d["_s"] = d[score_col] - d.groupby(fold_col)[score_col].transform("mean")
     d["_o"] = d[outcome_col] - d.groupby(fold_col)[outcome_col].transform("mean")
     return float(d["_s"].rank().corr(d["_o"].rank()))
+
+
+def summarize_folds(df: pd.DataFrame) -> str:
+    """Report for a walk-forward results frame (one row per fold x candidate / ensemble / baseline).
+    For each way of choosing what to trade: mean test return per window, its spread across folds, the
+    share of folds that were positive, and a t-statistic (mean / standard error over folds) - with only
+    ~6 folds a mean that isn't several standard errors from zero is weak evidence, so this prints it."""
+    cand = df[df.kind == "candidate"]
+    per_fold = {
+        "random candidate": cand.groupby("fold").test_ret.mean(),
+        "tournament winner (deployed today)": cand[cand["rank"] == 1].set_index("fold").test_ret,
+    }
+    for kind, label in (("vote_all", "vote of all candidates"), ("vote_top3", "vote of top-3 by select")):
+        if kind in set(df.kind):
+            per_fold[label] = df[df.kind == kind].set_index("fold").test_ret
+    for kind in ("buy_and_hold", *sorted(k for k in set(df.kind) if k.startswith("baseline_"))):
+        if kind in set(df.kind):
+            per_fold[kind] = df[df.kind == kind].set_index("fold").test_ret
+
+    lines = [f"{len(set(df.fold))} folds; return per ~6-week test window (1x notional, before leverage):",
+             f"  {'':36}{'mean':>8}{'std':>8}{'folds>0':>9}{'t-stat':>8}"]
+    for label, series in per_fold.items():
+        series = series.sort_index()
+        n = len(series)
+        se = series.std(ddof=1) / n**0.5 if n > 1 else float("nan")
+        lines.append(f"  {label:36}{series.mean():>+8.2f}{series.std(ddof=1):>8.2f}{(series > 0).sum():>6}/{n:<3}{series.mean() / se:>8.2f}")
+    win = per_fold["tournament winner (deployed today)"].sort_index()
+    avg = per_fold["random candidate"].sort_index()
+    lines.append(f"winner beat the fold's average candidate in {int((win > avg).sum())}/{len(win)} folds")
+    lines.append("within-fold rank correlation, select-window return vs test return: "
+                 f"{within_fold_rank_correlation(cand, 'select_ret', 'test_ret'):+.3f}  (0 = picks no better than chance)")
+    lines.append(f"mean trades per candidate per test window: {cand.test_trades.mean():.1f}")
+    return "\n".join(lines)

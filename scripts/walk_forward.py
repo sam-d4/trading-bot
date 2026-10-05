@@ -29,7 +29,7 @@ from app.data.enrichment import load_feature_context  # noqa: E402
 from app.data.features import compute_features  # noqa: E402
 from app.data.store import load_candles  # noqa: E402
 from app.rl.tournament import run_tournament  # noqa: E402
-from app.rl.walk_forward import VoteStrategy, fold_bounds, within_fold_rank_correlation  # noqa: E402
+from app.rl.walk_forward import VoteStrategy, fold_bounds, summarize_folds  # noqa: E402
 from app.strategy.baselines import default_baseline_strategies  # noqa: E402
 
 WARMUP = 25  # rows fed before the test window so a policy's lookback buffer is warm when scoring starts
@@ -109,27 +109,8 @@ def main() -> int:
               f"| vote_all {fr[fr.kind == 'vote_all'].test_ret.iloc[0]:+.2f}% "
               f"| buy&hold {fr[fr.kind == 'buy_and_hold'].test_ret.iloc[0]:+.2f}%", flush=True)
 
-    df = pd.DataFrame(rows)
-    cand = df[df.kind == "candidate"]
-    print(f"\n=== {instrument}: {len(folds)} folds x {args.candidates} candidates, out-of-sample, cost {args.cost_bps}bp/side ===")
-    summary = {
-        "all candidates (random pick)": cand.test_ret.mean(),
-        "tournament winner (what we deploy)": cand[cand["rank"] == 1].test_ret.mean(),
-        "vote of all candidates": df[df.kind == "vote_all"].test_ret.mean(),
-        "vote of top-3": df[df.kind == "vote_top3"].test_ret.mean(),
-        "buy & hold": df[df.kind == "buy_and_hold"].test_ret.mean(),
-    }
-    for b in default_baseline_strategies():
-        summary[b.name] = df[df.kind == b.name].test_ret.mean()
-    print("mean return per 750-bar (~6 week) test window:")
-    for k, v in summary.items():
-        print(f"  {k:38} {v:+.3f}%")
-    win = cand[cand["rank"] == 1].set_index("fold").test_ret
-    avg = cand.groupby("fold").test_ret.mean()
-    print(f"winner beat the fold's average candidate in {(win > avg).sum()}/{len(win)} folds")
-    print(f"within-fold rank correlation, select-window return vs test return: "
-          f"{within_fold_rank_correlation(cand, 'select_ret', 'test_ret'):+.3f}  (0 = the gate picks no better than chance)")
-    print(f"mean trades per candidate per test window: {cand.test_trades.mean():.1f}")
+    print(f"\n=== {instrument}: out-of-sample, cost {args.cost_bps}bp/side ===")
+    print(summarize_folds(pd.DataFrame(rows)))
     return 0
 
 
